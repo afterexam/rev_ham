@@ -9,7 +9,7 @@ import os  # 导入 os 库
 
 # --- [ Flask 应用设置 ] ---
 app = Flask(__name__)
-app.config['JSON_AS_ASCII'] = False  # 确保返回的 JSON 中文显示正常
+app.config['JSON_AS_ASCII'] = True  # 确保返回的 JSON 中文显示正常
 CORS(app)  # 允许所有来源的跨域请求
 
 # --- [ 全局配置区 ] ---
@@ -115,7 +115,7 @@ HTML_TEMPLATE = """
                 const response = await fetch('/get_comments', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
+                        'Content-Type': 'application/json; charset=utf-8',
                     },
                     // 2. 将参数放在请求体 (body) 里
                     body: JSON.stringify({
@@ -162,25 +162,47 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+import re
+
+import re
+
+def remove_emoji(text):
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags
+        "\u2700-\u27BF"          # dingbats
+        "\u24C2"                 # enclosed characters (单个字符)
+        "\U0001F251"             # 单个字符
+        "]+",
+        flags=re.UNICODE
+    )
+    return emoji_pattern.sub(r'', text)
+
 
 # --- [ API 接口定义 ] ---
 # --- [ ❗️❗️❗️ 核心修正点在这里 ❗️❗️❗️ ] ---
 # 1. 允许 POST 方法
 @app.route('/get_comments', methods=['POST', 'GET'], strict_slashes=False)
 def get_course_comments():
-    # 2. 从 JSON 请求体中获取数据
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "请求体必须是 JSON 格式"}), 400
+    if request.method == 'POST':
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "请求体必须是 JSON 格式"}), 400
 
-    course_name = data.get('course_name')
-    instructor = data.get('instructor', "")  # 如果没提供，默认为空字符串
+        course_name = data.get('course_name')
+        instructor = data.get('instructor', "")
+    else:
+        # GET 方法走这里
+        course_name = request.args.get('course_name')
+        instructor = request.args.get('instructor', "")
 
-    if not course_name:
-        return jsonify({"error": "请在请求体中提供 'course_name' 参数"}), 400
+    # if not course_name:
+    #     return jsonify({"error": "请提供 'course_name' 参数"}), 400
 
     try:
-        # 3. 后续逻辑保持不变
         print(f"[*] 正在调用核心逻辑处理: '{course_name} - {instructor}'")
         try:
             comments_text = call.main(course_name=course_name, instructor=instructor)
@@ -193,16 +215,16 @@ def get_course_comments():
         combined_text = f"{comments_text+other_info}\n\n"
 
 
-        print(combined_text,'combine')
+        combined_text = remove_emoji(combined_text)
+        print(combined_text, 'combine')
         resp = {"raw_text": combined_text}
-        padding = " " * (2048 - len(combined_text) - 100)  # 预留点头部的空间
-        resp['padding'] = padding
+        # padding = " " * (2048 - len(combined_text) - 100)
+        # resp['padding'] = padding
 
         return jsonify(resp)
-    # --- [ 修正结束 ] ---
     except Exception as e:
         print(f"[!] 核心逻辑执行出错: {e}")
-        return jsonify({"error": "服务器内部错误", "details": str(e)}), 500
+        return jsonify({"error": "服务器内部错误"}), 500
 
 
 # --- [ 启动服务器 ] ---

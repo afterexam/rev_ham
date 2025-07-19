@@ -7,9 +7,11 @@ import ssl
 import course_detail_pb2
 import course_detail_pb2_grpc
 
+# --- 开启 gRPC 底层调试日志 ---
+# 这会打印出所有网络传输和 SSL 握手的详细信息
 # import os
-# os.environ["GRPC_VERBOSITY"] = "DEBUG"
-# os.environ["GRPC_TRACE"] = "api,channel,http,call_error"
+# os.environ['GRPC_TRACE'] = 'all'
+# os.environ['GRPC_VERBOSITY'] = 'DEBUG'
 
 # ✅ 从 .pfx 提取的 PEM 文件
 with open("client_cert.pem", "rb") as f:
@@ -29,24 +31,34 @@ creds = grpc.ssl_channel_credentials(
 )
 
 # ✅ 覆盖域名（否则 SNI 验证会失败）
-options = (('grpc.ssl_target_name_override', 'api.ham.nowcent.cn'),)
+options = [('grpc.ssl_target_name_override', 'api.ham.nowcent.cn')]
 
 # ✅ 创建安全通道
 channel = grpc.secure_channel('api.ham.nowcent.cn:4443', creds, options)
 
+import re
 
-JWT = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJwYXlsb2FkIjoie1wiY3JlYXRlZFRpbWVcIjoxNzUyOTMzNTQ4NjIyLFwiZGV2aWNlXCI6XCJBTkQwM2Y1MTUyYzViNzQ3N2E3NDU1MDcxNTRiOWU1MjdlMDM3ZTlcIixcInR5cGVcIjpcImJlYXJlclwiLFwidXNlcklkXCI6XCIyYzlhODA4MjkwNWY3ZTNiMDE5MDcxNGU3MTU2MDEzMlwiLFwidXNlclR5cGVcIjpcIlVzZXJcIn0iLCJ0eXBlIjoiYmVhcmVyIn0.7SuHPu5cO0VRzNuHXjMG3sKujiRfSliws0yCzYeqgZk'
+with open("Token_saver", "r", encoding="utf-8") as f:
+    content = f.read()
+
+ACCESS_TOKEN = re.search(r'token:\s*"([^"]+)"', content).group(1)
 
 
+REFRESH_TOKEN = re.search(r'refresh_token:\s*"([^"]+)"', content).group(1)
+
+DEVICE_FINGERPRINT = 'FC1E09E83AEBC0DAD7CDDC1B777850AE'
 
 # ✅ 准备 header (元数据)
 metadata = [
-    ('authorization', f'bearer {JWT}'),
+    ('authorization', f'{ACCESS_TOKEN}'),
     ('token', 'AND03f5152c5b7477a745507154b9e527e037e9'),
     ('version_code', '121'),
     ('version_name', '1.6.3.121'),
     ('tpns_token', 'AND03f5152c5b7477a745507154b9e527e037e9'),
-    ('grpc-accept-encoding', 'gzip')
+    ('grpc-accept-encoding', 'gzip'),
+    ('user-agent', 'grpc-java-okhttp/1.64.0'),
+    ('te','trailers'),
+
 ]
 def send_request(request_message):
     # ✅ stub
@@ -84,6 +96,38 @@ import grpc
 import course_detail_pb2
 import course_detail_pb2_grpc
 from datetime import datetime
+
+
+def refresh_login():
+    """复现 DoRefreshLogin 请求"""
+
+    # 创建一个服务的 "存根" (Stub)，就像一个本地的代理对象
+    stub = course_detail_pb2_grpc.LoginServiceStub(channel)
+
+    # 构造请求体 (按照 .proto 文件里的 RefreshLoginRequest 结构)
+    request = course_detail_pb2.RefreshLoginRequest(
+        refresh_token=REFRESH_TOKEN,
+        extend_info=course_detail_pb2.LoginExtendInfo(
+            # 注意：proto 里字段名是 student_id_secret，但根据分析我们填入设备指纹
+            student_id_secret=DEVICE_FINGERPRINT
+        )
+    )
+
+    print("🚀 正在发送 gRPC 请求...")
+    print(f"请求体内容:\n{request}")
+
+    try:
+        # 发起 RPC 调用！
+        response = stub.DoRefreshLogin(request, metadata=metadata)
+        print("✅ 请求成功！")
+        print("服务器响应:\n", response)
+        # 文本覆盖写入 response 的字符串形式
+        with open('Token_saver', 'w', encoding='utf-8') as f:
+            f.write(str(response))
+
+    except grpc.RpcError as e:
+        print(f"❌ 请求失败: {e.code()} - {e.details()}")
+
 
 def format_comments(resp) -> str:
     import re
@@ -155,8 +199,11 @@ def main(course_name="音乐欣赏",instructor="王渊"):
         print("-" * 40)
     formatted = format_comments(resp)
     return formatted
+
 if __name__ == '__main__':
     main()
+    # while True:
+    refresh_login()
     # id_resp = get_id()
     # id = id_resp.course_table_id
     # get_course_comment_page_no_timestamp_lib(id,page_create_time=None, page_num=0, page_size=1)
