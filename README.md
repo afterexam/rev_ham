@@ -33,15 +33,13 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 1. **SSL Pinning 绕过**
    - **初步分析**: 使用通用 SSL Pinning 绕过脚本未能成功，表明应用存在自定义的校验逻辑。
    - **代码定位**: 通过 JADX 进行静态分析，定位到应用使用了自定义的 `TrustManager` (`od.e`) 以及需要客户端证书的 KeyStore。
-   - **Frida Hook 实现**: 编写 `interceptor.js` 脚本，通过 Hook 禁用自定义 `TrustManager` 的证书校验功能。同时，在运行时从内存中克隆并导出客户端 KeyStore，以满足服务器端的双向认证要求。完成此步骤后，所有应用流量均可通过中间人代理进行解密分析。
+   - **Frida Hook 实现**: 编写 `interceptor.js` 脚本，在运行时从内存中克隆并导出客户端 KeyStore，以满足服务器端的双向认证要求。完成此步骤后，所有应用流量均可通过中间人代理进行解密分析。
 2. **gRPC 协议分析**
    - **协议识别**: 流量分析表明，课程评价功能的网络通信采用了 gRPC 协议。
    - **接口定义还原**: 结合应用代码和网络请求的载荷，还原了 gRPC 服务所需的 `.proto` 定义文件 (`course_detail.proto`)。
    - **客户端代码生成**: 使用 `protoc` 编译器，根据 `.proto` 文件生成了 Python 语言的 gRPC 客户端桩代码 (`_pb2.py` 和 `_pb2_grpc.py`)。`decode_grpc.py` 脚本用于验证 `protobuf` 解码的正确性。
 3. **JWT 签名密钥提取**
-   - **定位签名实现**: 在 Java 层 Hook 加密库未能找到签名逻辑，推断签名过程在原生库（.so 文件）中实现。
-   - **原生库 Hook**: 编写 `jwt_spy.js` 脚本，对底层的 `libcrypto.so` 库进行 Hook。
-   - **密钥捕获**: 通过 Hook `HMAC` 函数，拦截不到东西, 看来JWT密钥在服务器, 尝试暴力破解失败
+   - **密钥捕获**: 通过 Hook `HMAC` 函数，拦截不到东西, 看来JWT密钥在服务器
 4. **Python 客户端实现**
    - **组件整合**: 综合已获取的客户端证书、KeyStore、gRPC 桩代码和 JWT 密钥。
    - **代码编写**: 编写 `call.py` 和 `get_id.py` 等脚本，构建 gRPC 请求，并在请求头中附加正确的 `Authorization` (JWT)，成功模拟了客户端与服务器的通信，实现了课程评价数据的获取。
@@ -53,7 +51,7 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 
 
 - `app.py`: Flask Web 应用，提供一个简单的查询界面。
-- `call.py`: 封装了 gRPC 请求的核心逻辑，用于获取课程评价。
+- `call.py`: 封装了 gRPC 请求的核心逻辑，用于获取课程评价/刷新登录状态
 - `taokela.py` / `luoli.py`: 用于调用其他公开课程信息 API 的辅助脚本。
 - `interceptor.js`: Frida 脚本，用于绕过 SSL Pinning 和导出 KeyStore。
 - `jwt_spy.js`: Frida 脚本，用于从原生层捕获 HMAC-SHA256 密钥。
@@ -98,7 +96,7 @@ nf.d.invokeSuspend(AccountManager) 其实是ig文件里面的LocalStorageManager
 
 - 然后doRefreshLogin会更新此文件的值, 打开app有个一读一写的过程
 - 此文件的每个缓存的值(token,userid等)都有一个哈希值做校验 , 盐值为 `vTzpGEkkc7tsSDB4` , 哈希(参数名+ 值+ 盐)
-- 详见hook_key.js
+- 详见hook_key.js , 可以捕获到token 的读写
 
 
 
