@@ -1,210 +1,243 @@
-import base64
-import json
 import re
-
 import grpc
-import ssl
-import course_detail_pb2
-import course_detail_pb2_grpc
-
-# --- 开启 gRPC 底层调试日志 ---
-# 这会打印出所有网络传输和 SSL 握手的详细信息
-# import os
-# os.environ['GRPC_TRACE'] = 'all'
-# os.environ['GRPC_VERBOSITY'] = 'DEBUG'
-
-# ✅ 从 .pfx 提取的 PEM 文件
-with open("client_cert.pem", "rb") as f:
-    cert_chain = f.read()
-with open("client_key.pem", "rb") as f:
-    private_key = f.read()
-# 可选：信任的根证书（如果需要服务端验证）
-# with open("D:/bqh/DeskTop/root_cert.pem", "rb") as f:
-#     root_cert = f.read()
-# creds = grpc.ssl_channel_credentials(root_cert, private_key, cert_chain)
-
-# ⚠️ 如果你信任系统证书 + 用客户端证书
-creds = grpc.ssl_channel_credentials(
-    root_certificates=None,
-    private_key=private_key,
-    certificate_chain=cert_chain
-)
-
-# ✅ 覆盖域名（否则 SNI 验证会失败）
-options = [('grpc.ssl_target_name_override', 'api.ham.nowcent.cn')]
-
-# ✅ 创建安全通道
-channel = grpc.secure_channel('api.ham.nowcent.cn:4443', creds, options)
-
-import re
-
-with open("Token_saver", "r", encoding="utf-8") as f:
-    content = f.read()
-
-ACCESS_TOKEN = re.search(r'token:\s*"([^"]+)"', content).group(1)
-
-
-REFRESH_TOKEN = re.search(r'refresh_token:\s*"([^"]+)"', content).group(1)
-
-DEVICE_FINGERPRINT = 'FC1E09E83AEBC0DAD7CDDC1B777850AE'
-
-# ✅ 准备 header (元数据)
-metadata = [
-    ('authorization', f'{ACCESS_TOKEN}'),
-    ('token', 'AND03f5152c5b7477a745507154b9e527e037e9'),
-    ('version_code', '121'),
-    ('version_name', '1.6.3.121'),
-    ('tpns_token', 'AND03f5152c5b7477a745507154b9e527e037e9'),
-    ('grpc-accept-encoding', 'gzip'),
-    ('user-agent', 'grpc-java-okhttp/1.64.0'),
-    ('te','trailers'),
-
-]
-def send_request(request_message):
-    # ✅ stub
-    stub = course_detail_pb2_grpc.GetCourseDetailCommentServiceStub(channel)
-
-    response = stub.GetCourseCommentPage(request_message, metadata=metadata)
-    return response
-
-def get_id(course_name="音乐欣赏",instructor=""):
-    """
-    发送 gRPC 请求并返回响应。
-    """
-    # ✅ 准备请求消息 (获取 ID)
-    # ✅ stub
-    stub = course_detail_pb2_grpc.CourseDetailServiceStub(channel)
-
-    request_message = course_detail_pb2.GetCourseDetailMatchRequest(
-        course_name=course_name,
-        instructor=instructor
-    )
-    try:
-        print(f"[*] 正在发送请求:\n{request_message}")
-        # ✅ 调用 GetCourseDetailMatch 方法
-        response = stub.GetCourseDetailMatch(request_message, metadata=metadata)
-        # print(response)
-        return response
-    except grpc.RpcError as e:
-        print(f"\n--- [ 请求失败! ] ---")
-        print(f"[*] gRPC 错误代码: {e.code()}")
-        print(f"[*] 错误详情: {e.details()}")
-        return None
-
-
-import grpc
-import course_detail_pb2
-import course_detail_pb2_grpc
 from datetime import datetime
 
+# 导入你生成的 pb2 和 pb2_grpc 文件
+import course_detail_pb2
+import course_detail_pb2_grpc
 
-def refresh_login():
-    """复现 DoRefreshLogin 请求"""
 
-    # 创建一个服务的 "存根" (Stub)，就像一个本地的代理对象
-    stub = course_detail_pb2_grpc.LoginServiceStub(channel)
+class HamClient:
+    """
+    一个用于与 Ham App 后端 gRPC 服务交互的客户端。
+    封装了 mTLS 认证、Token 管理和 API 调用。
+    """
+    API_HOST = 'api.ham.nowcent.cn'
+    API_PORT = 4443
+    DEVICE_FINGERPRINT = 'FC1E09E83AEBC0DAD7CDDC1B777850AE'  # 设备指纹
 
-    # 构造请求体 (按照 .proto 文件里的 RefreshLoginRequest 结构)
-    request = course_detail_pb2.RefreshLoginRequest(
-        refresh_token=REFRESH_TOKEN,
-        extend_info=course_detail_pb2.LoginExtendInfo(
-            # 注意：proto 里字段名是 student_id_secret，但根据分析我们填入设备指纹
-            student_id_secret=DEVICE_FINGERPRINT
+    def __init__(self, cert_path='client_cert.pem', key_path='client_key.pem', token_path='Token_saver'):
+        """
+        初始化客户端。
+
+        Args:
+            cert_path (str): 客户端证书路径 (.pem)。
+            key_path (str): 客户端私钥路径 (.pem)。
+            token_path (str): 存储 token 的文件路径。
+        """
+        self.token_path = token_path
+        self._access_token = None
+        self._refresh_token = None
+
+        # 1. 加载认证和 Token
+        self._creds = self._load_credentials(cert_path, key_path)
+        self.load_tokens()
+
+        # 2. 创建 gRPC 通道
+        self._channel = self._create_secure_channel()
+
+        # 3. 初始化各个服务的 stubs
+        self._course_stub = course_detail_pb2_grpc.CourseDetailServiceStub(self._channel)
+        self._comment_stub = course_detail_pb2_grpc.GetCourseDetailCommentServiceStub(self._channel)
+        self._login_stub = course_detail_pb2_grpc.LoginServiceStub(self._channel)
+
+    def _load_credentials(self, cert_path, key_path):
+        """加载 mTLS 证书并创建 gRPC 凭证。"""
+        print(f"[*] 正在从 '{cert_path}' 和 '{key_path}' 加载 SSL客户端证书...")
+        try:
+            with open(cert_path, "rb") as f:
+                cert_chain = f.read()
+            with open(key_path, "rb") as f:
+                private_key = f.read()
+
+            return grpc.ssl_channel_credentials(
+                root_certificates=None,  # 信任系统根证书
+                private_key=private_key,
+                certificate_chain=cert_chain
+            )
+        except FileNotFoundError as e:
+            print(f"❌ 错误: 证书文件未找到 - {e}")
+            raise
+
+    def _create_secure_channel(self):
+        """创建 gRPC 安全通道。"""
+        # SNI 覆盖是必须的，否则域名验证会失败
+        options = [('grpc.ssl_target_name_override', self.API_HOST)]
+        target = f'{self.API_HOST}:{self.API_PORT}'
+        print(f"[*] 正在连接到 gRPC 服务器: {target}")
+        return grpc.secure_channel(target, self._creds, options)
+
+    def _get_metadata(self):
+        """根据当前 token 生成请求头。"""
+        if not self._access_token:
+            raise ValueError("Access Token 未加载，请先调用 load_tokens() 或 refresh_login()")
+
+        return [
+            ('authorization', self._access_token),
+            ('token', 'AND03f5152c5b7477a745507154b9e527e037e9'),  # 这个值似乎是固定的
+            ('version_code', '121'),
+            ('version_name', '1.6.3.121'),
+            ('tpns_token', 'AND03f5152c5b7477a745507154b9e527e037e9'),
+            ('grpc-accept-encoding', 'gzip'),
+            ('user-agent', 'grpc-java-okhttp/1.64.0'),
+            ('te', 'trailers'),
+        ]
+
+    def load_tokens(self):
+        """从文件加载 Access Token 和 Refresh Token。"""
+        print(f"[*] 正在从 '{self.token_path}' 加载 Tokens...")
+        try:
+            with open(self.token_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            # 使用更健壮的正则来提取带 "bearer " 前缀的 token
+            access_token_match = re.search(r'token:\s*"(bearer\s+[^"]+)"', content)
+            refresh_token_match = re.search(r'refresh_token:\s*"([^"]+)"', content)
+
+            if not access_token_match or not refresh_token_match:
+                raise ValueError("在文件中找不到 token 或 refresh_token。")
+
+            self._access_token = access_token_match.group(1)
+            self._refresh_token = refresh_token_match.group(1)
+            print("✅ Tokens 加载成功。")
+        except (FileNotFoundError, ValueError) as e:
+            print(f"⚠️ 警告: 加载 Tokens 失败 - {e}。稍后可能需要刷新登录。")
+            self._access_token = None
+            self._refresh_token = None
+
+    def save_tokens(self, response_text):
+        """将新的 token 信息保存到文件。"""
+        print(f"[*] 正在将新的 Tokens 保存到 '{self.token_path}'...")
+        try:
+            with open(self.token_path, 'w', encoding='utf-8') as f:
+                f.write(response_text)
+            print("✅ Tokens 保存成功。")
+        except IOError as e:
+            print(f"❌ 错误: 保存 Tokens 失败 - {e}")
+
+    def refresh_login(self):
+        """使用 Refresh Token 刷新登录状态，并更新内部 tokens。"""
+        if not self._refresh_token:
+            print("❌ 错误: Refresh Token 不存在，无法刷新。")
+            return
+
+        request = course_detail_pb2.RefreshLoginRequest(
+            refresh_token=self._refresh_token,
+            extend_info=course_detail_pb2.LoginExtendInfo(
+                student_id_secret=self.DEVICE_FINGERPRINT
+            )
         )
-    )
 
-    print("🚀 正在发送 gRPC 请求来刷新登录状态...")
-    print(f"请求体内容:\n{request}")
+        print("🚀 正在发送 gRPC 请求来刷新登录状态...")
+        print(f"请求体内容:\n{request}")
 
-    try:
-        # 发起 RPC 调用！
-        response = stub.DoRefreshLogin(request, metadata=metadata)
-        print("✅ 请求成功！")
-        print("服务器响应:\n", response)
-        # 文本覆盖写入 response 的字符串形式
-        with open('Token_saver', 'w', encoding='utf-8') as f:
-            f.write(str(response))
+        try:
+            response = self._login_stub.DoRefreshLogin(request, metadata=self._get_metadata())
+            print("✅ 请求成功！")
+            print(f"服务器响应:\n{response}")
 
-    except grpc.RpcError as e:
-        print(f"❌ 请求失败: {e.code()} - {e.details()}")
+            # 更新内部状态并保存到文件
+            self.save_tokens(str(response))
+            self.load_tokens()  # 重新加载以更新 self._access_token
 
+        except grpc.RpcError as e:
+            print(f"❌ 请求失败: {e.code()} - {e.details()}")
 
-def format_comments(resp) -> str:
-    import re
-    from datetime import datetime
-
-    raw_text = str(resp)
-    comments = re.findall(r'course_comment\s*{(.*?)}\s*(?=course_comment|page_cursor|$)', raw_text, re.DOTALL)
-
-    result = []
-    for i, comment in enumerate(comments, 1):
-        username = re.search(r'username:\s*"([^"]+)"', comment)
-        content = re.search(r'content:\s*"([^"]+)"', comment)
-        star = re.search(r'rate_info\s*{[^}]*star:\s*(\d)', comment)
-        seconds = re.search(r'create_time\s*{[^}]*seconds:\s*(\d+)', comment)
-
-        username = username.group(1) if username else "未知用户"
-        content = content.group(1) if content else "无内容"
-        star = star.group(1) if star else "无评分"
-        timestamp = int(seconds.group(1)) if seconds else 0
-        date_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S") if timestamp else "未知时间"
-
-        result.append(
-            f"—— 评论 {i} ——\n"
-            f"👤 用户名: {username}\n"
-            f"⭐ 评分  : {star}\n"
-            f"🕒 时间  : {date_str}\n"
-            f"📝 内容  : {content}\n"
-            + "-" * 40
+    def _get_course_id(self, course_name, instructor=""):
+        """内部方法：根据课程名和教师名获取课程 ID。"""
+        request = course_detail_pb2.GetCourseDetailMatchRequest(
+            course_name=course_name,
+            instructor=instructor
         )
+        print(f"[*] 正在获取课程 ID: '{course_name}' - '{instructor}'")
+        try:
+            response = self._course_stub.GetCourseDetailMatch(request, metadata=self._get_metadata())
+            if response and response.success and response.course_table_id:
+                print(f"✅ 成功获取课程 ID: {response.course_table_id}")
+                return response.course_table_id
+            else:
+                print(f"⚠️ 警告: 未能获取到课程 ID。服务器消息: {response.message}")
+                return None
+        except grpc.RpcError as e:
+            print(f"❌ 获取课程 ID 失败: {e.code()} - {e.details()}")
+            return None
 
-    return "\n".join(result)
+    def get_course_comments(self, course_name, instructor=""):
+        """
+        获取指定课程的评价。
 
-def main(course_name="音乐欣赏",instructor="王渊"):
-    print(course_name)
-    id_resp = get_id(course_name=course_name,instructor=instructor)
-    id = id_resp.course_table_id
+        Args:
+            course_name (str): 课程名称。
+            instructor (str): 讲师名称。
 
+        Returns:
+            str: 格式化后的评论字符串，或一条错误信息。
+        """
+        course_id = self._get_course_id(course_name, instructor)
+        if not course_id:
+            return "无法获取课程评价，因为未能找到课程 ID。"
 
-    request = course_detail_pb2.GetCourseCommentPageRequest(
-        id=id
-    )
+        request = course_detail_pb2.GetCourseCommentPageRequest(id=course_id)
 
-    resp = send_request(request)
-    # print(resp)
-    import re
-    from datetime import datetime
-    raw_text = str(resp)
-    # 匹配每条 comment 块
-    comments = re.findall(r'course_comment\s*{(.*?)}\s*(?=course_comment|page_cursor|$)', raw_text, re.DOTALL)
+        print(f"[*] 正在获取课程 '{course_name}' (ID: {course_id}) 的评价...")
+        try:
+            response = self._comment_stub.GetCourseCommentPage(request, metadata=self._get_metadata())
+            return self._format_comments(response)
+        except grpc.RpcError as e:
+            error_message = f"❌ 获取课程评价失败: {e.code()} - {e.details()}"
+            print(error_message)
+            return error_message
 
-    # 解析每条评论
-    for i, comment in enumerate(comments, 1):
-        username = re.search(r'username:\s*"([^"]+)"', comment)
-        content = re.search(r'content:\s*"([^"]+)"', comment)
-        star = re.search(r'rate_info\s*{[^}]*star:\s*(\d)', comment)
-        seconds = re.search(r'create_time\s*{[^}]*seconds:\s*(\d+)', comment)
+    @staticmethod
+    def _format_comments(resp) -> str:
+        """静态方法：将 gRPC 响应格式化为人类可读的字符串。"""
+        raw_text = str(resp)
+        comments = re.findall(r'course_comment\s*{(.*?)}\s*(?=course_comment|page_cursor|$)', raw_text, re.DOTALL)
 
-        username = username.group(1) if username else "未知用户"
-        content = content.group(1) if content else "无内容"
-        star = star.group(1) if star else "无评分"
-        timestamp = int(seconds.group(1)) if seconds else 0
-        date_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S") if timestamp else "未知时间"
+        if not comments:
+            return "该课程暂无评价。"
 
-        print(f"—— 评论 {i} ——")
-        print(f"👤 用户名: {username}")
-        print(f"⭐ 评分  : {star}")
-        print(f"🕒 时间  : {date_str}")
-        print(f"📝 内容  : {content}")
-        print("-" * 40)
-    formatted = format_comments(resp)
-    return formatted
+        result = []
+        for i, comment_block in enumerate(comments, 1):
+            username = re.search(r'username:\s*"([^"]+)"', comment_block)
+            content = re.search(r'content:\s*"([^"]+)"', comment_block)
+            star = re.search(r'rate_info\s*{[^}]*star:\s*(\d)', comment_block)
+            seconds = re.search(r'create_time\s*{[^}]*seconds:\s*(\d+)', comment_block)
+
+            username_str = username.group(1) if username else "未知用户"
+            content_str = content.group(1) if content else "无内容"
+            star_str = star.group(1) if star else "无评分"
+            timestamp = int(seconds.group(1)) if seconds else 0
+            date_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S") if timestamp else "未知时间"
+
+            result.append(
+                f"—— 评论 {i} ——\n"
+                f"👤 用户名: {username_str}\n"
+                f"⭐ 评分  : {star_str}\n"
+                f"🕒 时间  : {date_str}\n"
+                f"📝 内容  : {content_str}\n"
+                + "-" * 40
+            )
+        return "\n".join(result)
+
 
 if __name__ == '__main__':
-    tea = '杨敏'
-    course='操作系统'
-    main(instructor=tea,course_name=course)
-    # while True:
-    refresh_login()
+    # --- 使用示例 ---
+
+    # 1. 创建客户端实例
+    client = HamClient()
+
+    # 2. 刷新登录 (如果需要的话，比如 token 过期了)
+    # client.refresh_login()
+
+    # 3. 查询课程评价
+
+    print("\n" + "=" * 20 + " 查询一门课程 " + "=" * 20)
+    comments_music = client.get_course_comments(course_name="音乐欣赏", instructor="王渊")
+    print(comments_music)
+
+    print("\n" + "=" * 20 + " 查询课程评价 " + "=" * 20)
+    comments = client.get_course_comments(course_name="操作系统", instructor="杨敏")
+    print(comments)
 
 

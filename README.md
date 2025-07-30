@@ -4,15 +4,13 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 
 本项目是针对 "Ham" 移动应用的逆向工程分析。项目旨在演示绕过客户端安全防护、分析非标准网络协议，并最终实现对应用内部 API 接口调用的完整流程。
 
-
-
 ## 主要成果
 
 - **gRPC 接口逆向**: 成功分析了应用获取课程评价的 gRPC 接口，并使用 Python 实现了自动化调用。
 
 - **mTLS 绕过**: 通过 Frida 动态插桩，绕过了应用的证书校验机制，实现了对加密流量的解密和分析。
 
-- **完全摆脱app运行 **, 依靠对token缓存-获取机制的模拟实现登录状态刷新
+- **完全摆脱app运行:** 依靠对token缓存-获取机制的模拟实现登录状态刷新
 
 - **API 客户端开发**:
   - 开发了多个 Python 脚本，用于模拟应用请求，查询课程信息和用户评价。
@@ -24,7 +22,7 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 
 **获取课程id后展示评论内容**
 
-![image-20250728193926674](imgs/image-20250728193926674.png)
+![image-20250731060347137](imgs/image-20250731060347137.png)
 
 **更新登录状态, 理论上永远不用打开app**
 
@@ -34,11 +32,9 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 
 ## 技术栈
 
-
-
 - **动态插桩 (Dynamic Instrumentation)**: `Frida`
 - **静态分析 (Static Analysis)**: `JADX` & `mt管理器` 
-- **网络协议 (Network Protocol)**: `gRPC` & `Protocol Buffers`
+- **网络协议 (Network Protocol)**: `gRPC` & `Protocol`
 - **后端与脚本 (Backend & Scripting)**: `Python` (gRPC, Flask, Requests)
 
 
@@ -54,6 +50,8 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 配置app内的ssl证书之后, ssl握手正常,可开始后续抓包分析:
 
 ![image-20250731052744882](imgs/image-20250731052744882.png)
+
+所以**客户端一定要是app内部证书**, 因为服务端会进行校验 , 不然就Bad certificate
 
 
 
@@ -76,16 +74,21 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 
 ## 文件结构说明
 
+hook部分: 
 
+- `interceptor.js`: Frida 脚本，用于导出 KeyStore。
+
+- `jwt_spy.js`: Frida 脚本，用于捕获 HMAC-SHA256 密钥(无结果)
+
+- `hook_key.js` , 可以捕获到token 的本地的读写过程
+
+模拟部分: 
 
 - `app.py`: Flask Web 应用，提供一个简单的查询web界面
 - `call.py`: 封装了 gRPC 请求的核心逻辑，用于获取课程评价/刷新登录状态
 - `taokela.py` : 用于调用其他公开课程信息 API 的辅助脚本, 集成一切已知的查询接口, 最大程度消除信息差
-- `interceptor.js`: Frida 脚本，用于导出 KeyStore。
-- `jwt_spy.js`: Frida 脚本，用于从原生层捕获 HMAC-SHA256 密钥(无结果)
 - `*.proto`: gRPC 的服务和消息定义文件。
 - `*_pb2.py` / `*_pb2_grpc.py`: 由 `.proto` 文件生成的 Python 代码。
-- `hook_key.js` , 可以捕获到token 的本地的读写过程
 
 
 
@@ -125,9 +128,8 @@ nf.d.invokeSuspend(AccountManager) 其实是ig文件里面的LocalStorageManager
 
 反编译可知是从/data/data/com.nowcent.ham/shared_prefs/settings_5.xml 中读取上次缓存的refresh_token和access_token
 
-- 然后doRefreshLogin会更新此文件的值, 打开app有个一读一写的过程
+- 然后doRefreshLogin会更新此文件的值, 打开app有个一读一写的过程(详见hook_key.js , 可以捕获到token 的读写)
 - 此文件的每个缓存的值(token,userid等)都有一个哈希值做校验 , 盐值为 `vTzpGEkkc7tsSDB4` , 哈希(参数名+ 值+ 盐)
-- 详见hook_key.js , 可以捕获到token 的读写
 
 
 
