@@ -10,9 +10,9 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 
 - **gRPC 接口逆向**: 成功分析了应用获取课程评价的 gRPC 接口，并使用 Python 实现了自动化调用。
 
-- **SSL Pinning 绕过**: 通过 Frida 动态插桩，绕过了应用的多层证书校验机制，包括其自定义的 `TrustManager` 和客户端证书双向认证，实现了对加密流量的解密和分析。
+- **mTLS 绕过**: 通过 Frida 动态插桩，绕过了应用的证书校验机制，实现了对加密流量的解密和分析。
 
-- **完全摆脱app运行 **, 依靠对token缓存-获取机制的模拟
+- **完全摆脱app运行 **, 依靠对token缓存-获取机制的模拟实现登录状态刷新
 
 - **API 客户端开发**:
   - 开发了多个 Python 脚本，用于模拟应用请求，查询课程信息和用户评价。
@@ -37,7 +37,7 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 
 
 - **动态插桩 (Dynamic Instrumentation)**: `Frida`
-- **静态分析 (Static Analysis)**: `JADX`
+- **静态分析 (Static Analysis)**: `JADX` & `mt管理器` 
 - **网络协议 (Network Protocol)**: `gRPC` & `Protocol Buffers`
 - **后端与脚本 (Backend & Scripting)**: `Python` (gRPC, Flask, Requests)
 
@@ -45,22 +45,31 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 
 ## 逆向分析流程
 
+最开始ssl握手失败的原因在于服务端对证书做校验:
+
+![image-20250731052814967](imgs/image-20250731052814967.png)
+
+
+
+配置app内的ssl证书之后, ssl握手正常,可开始后续抓包分析:
+
+![image-20250731052744882](imgs/image-20250731052744882.png)
+
 
 
 整个逆向分析过程主要包含以下几个关键步骤：
 
-1. **SSL Pinning 绕过**
-   - **初步分析**: 使用通用 SSL Pinning 绕过脚本未能成功，表明应用存在自定义的校验逻辑。
-   - **代码定位**: 通过 JADX 进行静态分析，定位到应用使用了自定义的 `TrustManager` (`od.e`) 以及需要客户端证书的 KeyStore。
-   - **Frida Hook 实现**: 编写 `interceptor.js` 脚本，在运行时从内存中克隆并导出客户端 KeyStore，以满足服务器端的双向认证要求。完成此步骤后，所有应用流量均可通过中间人代理进行解密分析。
+1. **Frida Hook **: 编写 `interceptor.js` 脚本，在运行时从内存中克隆并导出客户端 KeyStore，以满足服务器端的双向认证要求。完成此步骤后，所有应用流量均可通过中间人代理进行解密分析。
 2. **gRPC 协议分析**
-   - **协议识别**: 流量分析表明，课程评价功能的网络通信采用了 gRPC 协议。
-   - **接口定义还原**: 结合应用代码和网络请求的载荷，还原了 gRPC 服务所需的 `.proto` 定义文件 (`course_detail.proto`)。
+   - **协议识别**: 抓包流量分析表明，课程评价功能的网络通信采用了 gRPC 协议。
+   - **接口定义还原**: 结合静态分析结果，还原了 gRPC 服务所需的 `.proto` 定义文件 (`course_detail.proto`)。
    - **客户端代码生成**: 使用 `protoc` 编译器，根据 `.proto` 文件生成了 Python 语言的 gRPC 客户端桩代码 (`_pb2.py` 和 `_pb2_grpc.py`)。`decode_grpc.py` 脚本用于验证 `protobuf` 解码的正确性。
 3. **JWT 签名密钥提取**
-   - **密钥捕获**: 通过 Hook `HMAC` 函数，拦截不到东西, 看来JWT密钥在服务器
+   - **密钥捕获**: 通过 Hook `HMAC` 函数，拦截不到东西, 看来JWT密钥在服务器 , 爆破验证后发现无弱口令漏洞
+4. **维持登录状态的逻辑逆向** 
+   - 分析发现两种长短token存储在本地(并不是由本地生成token ,而是记住服务器发来的token), 于是模拟这个思路来存储token 
 4. **Python 客户端实现**
-   - **组件整合**: 综合已获取的客户端证书、KeyStore、gRPC 桩代码和 JWT 密钥。
+   - **组件整合**: 综合已获取的客户端证书、KeyStore、gRPC 桩代码和 JWT token
    - **代码编写**: 编写 `call.py` 和 `get_id.py` 等脚本，构建 gRPC 请求，并在请求头中附加正确的 `Authorization` (JWT)，成功模拟了客户端与服务器的通信，实现了课程评价数据的获取。
 
 
@@ -69,13 +78,16 @@ Ham是武汉大学生活助手://github.com/orangeboyChen/whu-ham
 
 
 
-- `app.py`: Flask Web 应用，提供一个简单的查询界面。
+- `app.py`: Flask Web 应用，提供一个简单的查询web界面
 - `call.py`: 封装了 gRPC 请求的核心逻辑，用于获取课程评价/刷新登录状态
-- `taokela.py` / `luoli.py`: 用于调用其他公开课程信息 API 的辅助脚本。
-- `interceptor.js`: Frida 脚本，用于绕过 SSL Pinning 和导出 KeyStore。
-- `jwt_spy.js`: Frida 脚本，用于从原生层捕获 HMAC-SHA256 密钥。
+- `taokela.py` : 用于调用其他公开课程信息 API 的辅助脚本, 集成一切已知的查询接口, 最大程度消除信息差
+- `interceptor.js`: Frida 脚本，用于导出 KeyStore。
+- `jwt_spy.js`: Frida 脚本，用于从原生层捕获 HMAC-SHA256 密钥(无结果)
 - `*.proto`: gRPC 的服务和消息定义文件。
 - `*_pb2.py` / `*_pb2_grpc.py`: 由 `.proto` 文件生成的 Python 代码。
+- `hook_key.js` , 可以捕获到token 的本地的读写过程
+
+
 
 ## TODO list
 

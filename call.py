@@ -83,7 +83,7 @@ def get_id(course_name="音乐欣赏",instructor=""):
         print(f"[*] 正在发送请求:\n{request_message}")
         # ✅ 调用 GetCourseDetailMatch 方法
         response = stub.GetCourseDetailMatch(request_message, metadata=metadata)
-        print(response)
+        # print(response)
         return response
     except grpc.RpcError as e:
         print(f"\n--- [ 请求失败! ] ---")
@@ -113,7 +113,7 @@ def refresh_login():
         )
     )
 
-    print("🚀 正在发送 gRPC 请求...")
+    print("🚀 正在发送 gRPC 请求来刷新登录状态...")
     print(f"请求体内容:\n{request}")
 
     try:
@@ -171,7 +171,7 @@ def main(course_name="音乐欣赏",instructor="王渊"):
     )
 
     resp = send_request(request)
-    print(resp)
+    # print(resp)
     import re
     from datetime import datetime
     raw_text = str(resp)
@@ -201,21 +201,10 @@ def main(course_name="音乐欣赏",instructor="王渊"):
     return formatted
 
 if __name__ == '__main__':
-    main()
+    tea = '杨敏'
+    course='操作系统'
+    main(instructor=tea,course_name=course)
     # while True:
     refresh_login()
-    # id_resp = get_id()
-    # id = id_resp.course_table_id
-    # get_course_comment_page_no_timestamp_lib(id,page_create_time=None, page_num=0, page_size=1)
-    # 构建 stub
-    # stub = course_detail_pb2_grpc.LoginServiceStub(channel)
-    #
-    # request = course_detail_pb2.RefreshLoginRequest(
-    #     refresh_token="eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJwYXlsb2FkIjoie1wiY3JlYXRlZFRpbWVcIjoxNzUyOTI2NTIyMzYxLFwiZGV2aWNlXCI6XCJBTkQwM2Y1MTUyYzViNzQ3N2E3NDU1MDcxNTRiOWU1MjdlMDM3ZTlcIixcInR5cGVcIjpcInJlZnJlc2hcIixcInVzZXJJZFwiOlwiMmM5YTgwODI5MDVmN2UzYjAxOTA3MTRlNzE1NjAxMzJcIixcInVzZXJUeXBlXCI6XCJVc2VyXCJ9IiwidHlwZSI6InJlZnJlc2gifQ.A1BeWNZgDT9w1kUcYmIU3I7qBziOeBV5eWfxb0rDVTQ",
-    #     extend_info=course_detail_pb2.LoginExtendInfo(
-    #         student_id_secret="FC1E09E83AEBC0DAD7CDDC1B777850AE"
-    #     )
-    # )
-    # response = stub.DoRefreshLogin(request, metadata=metadata)
 
 

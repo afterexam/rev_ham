@@ -5,10 +5,11 @@
  * 3. 将克隆体写入到 App 自己的私有数据目录(/data/data/com.nowcent.ham/files/)，
  * 完美规避公共目录的写入权限问题。
  */
-Java.perform(function() {
+Java.perform(function () {
     console.log("[*] “终极决战脚本 V7 - 后院导出”已部署...");
 
-    // --- 任务一：废掉自定义的 TrustManager (保持不变) ---
+
+    //--- 任务一：废掉自定义的 TrustManager (保持不变) ---
     try {
         const CustomTrustManager = Java.use('od.e');
         CustomTrustManager.checkServerTrusted.overload('[Ljava.security.cert.X509Certificate;', 'java.lang.String').implementation = function(chain, authType) {
@@ -24,7 +25,7 @@ Java.perform(function() {
         const KeyManagerFactory = Java.use('javax.net.ssl.KeyManagerFactory');
         KeyManagerFactory.init.overload('java.security.KeyStore', '[C').implementation = function (keyStore, password) {
             console.log("\n\n[!!!] BINGO! 拦截到兵工厂 KeyManagerFactory.init()!");
-            
+
             // --- 内存克隆核心 ---
             let keystoreBytes = null;
             if (keyStore) {
@@ -42,24 +43,24 @@ Java.perform(function() {
 
             // 将克隆体交给延迟任务去处理
             if (keystoreBytes) {
-                Java.scheduleOnMainThread(function() {
+                Java.scheduleOnMainThread(function () {
                     console.log("\n--- [延迟任务开始] ---");
-                    
+
                     // --- 修正点：将文件写入 App 的私有目录 ---
                     const File = Java.use('java.io.File');
                     const FileOutputStream = Java.use('java.io.FileOutputStream');
                     // App 的包名，用于构建私有路径
-                    const packageName = "com.nowcent.ham"; 
+                    const packageName = "com.nowcent.ham";
                     const dumpedKeystorePath = `/data/data/${packageName}/files/dumped_keystore.bks`;
-                    
+
                     const dumpedFile = File.$new(dumpedKeystorePath);
                     const fileOutputStream = FileOutputStream.$new(dumpedFile);
-                    
+
                     console.log(`    [*] 正在将内存中的“克隆体”写入到 App 的后院: ${dumpedKeystorePath}`);
                     try {
                         fileOutputStream.write(keystoreBytes);
                         console.log(`    ✅ 导出成功！请使用 adb pull ${dumpedKeystorePath} 将其取回。`);
-                    } catch(e) {
+                    } catch (e) {
                         console.error(`    ❌ 导出失败: ${e}`);
                     } finally {
                         fileOutputStream.close();
